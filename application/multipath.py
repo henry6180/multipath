@@ -185,7 +185,7 @@ class Multipath(app_manager.RyuApp):
         }
         pos=nx.spring_layout(self.net)
         nx.draw(self.net, pos, with_labels = True , **options)
-        plt.savefig(file_name)
+        plt.savefig(f'../image/{file_name}')
         plt.close()
 
     def show_dir(self, thing):

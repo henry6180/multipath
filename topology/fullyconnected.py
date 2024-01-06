@@ -6,7 +6,7 @@ from mininet.link import TCLink
 from mininet.topo import Topo
 import time
 
-SWITCHNUM = 5
+SWITCHNUM = 6
 
 class SampleTopo( Topo ):
     def build( self ):
