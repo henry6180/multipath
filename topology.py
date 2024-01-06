@@ -56,8 +56,9 @@ def createTopo():
     # runIperf(net=net,src='h4',dst='h5',bw_limit=15)
     # runIperf(net=net,src='h6',dst='h8',bw_limit=20)
 
-    print("Running CLI")
-    CLI(net)
+    # print("Running CLI")
+    # CLI(net)
+    net.pingAll()
     # time.sleep(2)
 
     print("Stopping network")
