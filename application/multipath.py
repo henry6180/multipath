@@ -17,7 +17,9 @@ from ryu.lib import hub
 # import inspect
 # import os.path
 from operator import itemgetter, attrgetter
+import random
 
+PATHNUM = 4
 
 
 class Multipath(app_manager.RyuApp):
@@ -76,6 +78,7 @@ class Multipath(app_manager.RyuApp):
                ...
               }
         '''  
+        self.group_ids = {}
 
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -196,7 +199,7 @@ class Multipath(app_manager.RyuApp):
             if not x[0].startswith('_'):
                 print(x)
 
-    def k_shortest_paths(self, G, source, target, k, weight=None):
+    def k_shortest_paths(self, G, source, target, k=PATHNUM, weight=None):
         return list(islice(nx.shortest_simple_paths(G, source, target, weight), k))
 
     def find_shortest_path(self, src_ip, dst_ip):
@@ -206,11 +209,13 @@ class Multipath(app_manager.RyuApp):
         if not (src_ip, dst_ip) in self.ksp.keys():
             self.ksp.setdefault((src_ip, dst_ip), [])
         if len(self.ksp[(src_ip, dst_ip)])==0:
-            self.ksp[(src_ip, dst_ip)].append(nx.shortest_path(self.net, src_ip, dst_ip))
-        # print(f'path between {src_ip} and {dst_ip}: {self.ksp[(src_ip, dst_ip)][0]}')
-        return self.ksp[(src_ip, dst_ip)][0]
+            # self.ksp[(src_ip, dst_ip)].append(nx.shortest_path(self.net, src_ip, dst_ip))
+            self.ksp[(src_ip,dst_ip)] = self.k_shortest_paths(self.net, src_ip, dst_ip)
+        # print(f'path between {src_ip} and {dst_ip}:')
+        # for path in self.ksp[(src_ip, dst_ip)]:
+        #     print(path[1:len(path)-1])
+        return self.ksp[(src_ip, dst_ip)]
                 
-
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
@@ -241,9 +246,9 @@ class Multipath(app_manager.RyuApp):
             src_ip = ip.src
             dst_ip = ip.dst
         elif eth.ethertype == ether_types.ETH_TYPE_ARP:
-            p = pkt.get_protocol(arp.arp)
-            src_ip = p.src_ip
-            dst_ip = p.dst_ip
+            p_arp = pkt.get_protocol(arp.arp)
+            src_ip = p_arp.src_ip
+            dst_ip = p_arp.dst_ip
         # Shortest path
         if src_ip not in self.net:
             self.net.add_node(src_ip)
@@ -251,28 +256,54 @@ class Multipath(app_manager.RyuApp):
             self.net.add_edge(dpid,src_ip,**{'port':in_port})
             self.plotNet()
         if dst_ip in self.net:
-            path = self.find_shortest_path(src_ip, dst_ip)
-            if dpid not in path:
-                # print(f'dpid not on the path : {dpid}')
+            paths = self.find_shortest_path(src_ip, dst_ip)
+            # make buckets
+            buckets = []
+            for path in paths:
+                # for i in path[1:len(path)-1]:
+                #     if i==dpid: print(f'\'{i}\' ',end='')
+                #     else :print(f'{i} ',end='')
+                # print('')
+                if dpid in path:
+                    next_hop = path[path.index(dpid)+1]
+                    out_port = self.net[dpid][next_hop]['port']
+                    action = [parser.OFPActionOutput(out_port)]
+                    buckets.append(parser.OFPBucket(weight=1, actions = action))
+            if len(buckets)==0:
                 return
-            next_hop = path[path.index(dpid)+1]
-            out_port = self.net[dpid][next_hop]['port']
+            if len(buckets)==1:
+                # path = paths[0]
+                # next_hop = path[path.index(dpid)+1]
+                # out_port = self.net[dpid][next_hop]['port']
+                actions = action
+            else:
+                if (dpid, src_ip, dst_ip) not in self.group_ids:
+                    n = random.randint(0, 2**32)
+                    while n in self.group_ids:
+                        n = random.randint(0, 2**32)
+                    self.group_ids[dpid, src_ip, dst_ip] = n
+                group_id = self.group_ids[dpid, src_ip, dst_ip]
+                req = parser.OFPGroupMod(datapath = datapath, 
+                                         command = ofproto.OFPGC_ADD,
+                                         type_ = ofproto.OFPGT_SELECT,
+                                         group_id = group_id, 
+                                         buckets = buckets)
+                datapath.send_msg(req)
+                actions = [parser.OFPActionGroup(group_id)]
+
+            match = parser.OFPMatch(eth_type=eth.ethertype,ipv4_src=src_ip,ipv4_dst=dst_ip)
+            self.add_flow(datapath, 1, match, actions)
         else:
             out_port = ofproto.OFPP_FLOOD
+            actions = [parser.OFPActionOutput(out_port)]
 
         self.logger.info("packet in s%s(port %s) %s->%s, eth=%s", dpid, in_port, src_ip, dst_ip, hex(eth.ethertype))
 
-        actions = [parser.OFPActionOutput(out_port)]
-
-        if out_port != ofproto.OFPP_FLOOD:
-            match = parser.OFPMatch(eth_type=eth.ethertype,
-                                    ipv4_src=src_ip,
-                                    ipv4_dst=dst_ip)
-            if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                self.add_flow(datapath, 1, match, actions, msg.buffer_id)
-                return
-            else:
-                self.add_flow(datapath, 1, match, actions)
+        # if out_port != ofproto.OFPP_FLOOD:
+            # if msg.buffer_id != ofproto.OFP_NO_BUFFER:
+            #     self.add_flow(datapath, 1, match, actions, msg.buffer_id)
+            #     return
+            # else:
 
         data = None
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:

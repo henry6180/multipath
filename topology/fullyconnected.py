@@ -16,9 +16,9 @@ class SampleTopo( Topo ):
         # self.addLink(h[0],s[0], cls=TCLink, bw=10)
         # self.addLink(h[1],s[SWITCHNUM-1], cls=TCLink, bw=10)
         for i in range(SWITCHNUM):
-            self.addLink(s[i],h[i], cls=TCLink, bw=10)
+            self.addLink(s[i],h[i], cls=TCLink, bw=100)
             for j in range(SWITCHNUM):
-                if j>i: self.addLink(s[i],s[j], cls=TCLink, bw=10)
+                if j>i: self.addLink(s[i],s[j], cls=TCLink, bw=100)
 
 def createTopo():
     topo = SampleTopo()
