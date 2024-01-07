@@ -19,7 +19,7 @@ from ryu.lib import hub
 from operator import itemgetter, attrgetter
 import random
 
-PATHNUM = 4
+PATHNUM = 2
 
 
 class Multipath(app_manager.RyuApp):
@@ -69,7 +69,7 @@ class Multipath(app_manager.RyuApp):
         '''
         self.net=nx.DiGraph()
         self.datapaths = {}
-        # self.monitor_thread = hub.spawn(self._monitor)
+        self.monitor_thread = hub.spawn(self._monitor)
 
         self.ksp = {}
         '''
@@ -151,16 +151,16 @@ class Multipath(app_manager.RyuApp):
         body = ev.msg.body
         self.logger.info('datapath '
                          'ipv4-src    ipv4-dst    '
-                         'out-port packets  bytes')
+                         'packets  bytes')
         self.logger.info('-------- '
                          '----------- ----------- '
-                         '-------- -------- --------')
+                         '-------- --------')
         for stat in sorted([flow for flow in body if flow.priority == 1 and flow.match['eth_type']==0x0800 ],key=lambda flow: (flow.match['ipv4_src'],flow.match['ipv4_dst'])):
-            self.logger.info('%8x %11s %11s %8x %8d %8d',
+            self.logger.info('%8x %11s %11s %8d %8d',
                              ev.msg.datapath.id,
                              stat.match['ipv4_src'], stat.match['ipv4_dst'],
-                             stat.instructions[0].actions[0].port,
                              stat.packet_count , stat.byte_count)
+        # stat.instructions[0].actions[0].port,
 
     @set_ev_cls(ofp_event.EventOFPPortStatsReply , MAIN_DISPATCHER)
     def _port_stats_reply_handler(self , ev):
