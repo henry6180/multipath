@@ -18,7 +18,7 @@ class SampleTopo( Topo ):
         for i in range(SWITCHNUM):
             self.addLink(s[i],h[i], cls=TCLink, bw=100)
             for j in range(SWITCHNUM):
-                if j>i: self.addLink(s[i],s[j], cls=TCLink, bw=50)
+                if j>i: self.addLink(s[i],s[j], cls=TCLink, bw=100)
 
 def createTopo():
     topo = SampleTopo()
@@ -27,17 +27,23 @@ def createTopo():
 
     print("Starting network")
     net.start()
-
     net.pingAll()
     # print("Running CLI")
     # CLI(net)
-    # time.sleep(2)
     src = net.get('h1')
     dst = net.get('h2')
-    src.cmd(f'iperf -s -p 5001 & ')
-    result = dst.cmd(f'iperf -c {src.IP()} -p 5001 -b 100M -t 30 -i 3')
-    result=result.split('\n')
-    print('\n'.join(result[0:]))
+    src.cmd(f'iperf -s & ')
+    while True:
+        result = dst.cmd(f'iperf -c {src.IP()} -b 100M -t 1')
+        result=result.split('\n')
+        print('\n'.join(result[0:]))
+        # result = dst.cmd(f'iperf -c {src.IP()} -b 100M -t 1')
+        # result=result.split('\n')
+        # print('\n'.join(result[0:]))
+        # result = dst.cmd(f'iperf -c {src.IP()} -b 100M -t 1')
+        # result=result.split('\n')
+        # print('\n'.join(result[0:]))
+        time.sleep(2)
 
 
     print("Stopping network")

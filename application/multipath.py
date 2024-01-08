@@ -19,7 +19,7 @@ from ryu.lib import hub
 from operator import itemgetter, attrgetter
 import random
 
-PATHNUM = 2
+PATHNUM = 3
 
 
 class Multipath(app_manager.RyuApp):
@@ -89,7 +89,6 @@ class Multipath(app_manager.RyuApp):
         '''
         self.host_ip = []
 
-
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         datapath = ev.msg.datapath
@@ -129,10 +128,11 @@ class Multipath(app_manager.RyuApp):
                 self._request_stats(dp)
             self.show_flow_state('10.0.0.1', '10.0.0.2')
             self.show_shortest_path('10.0.0.1', '10.0.0.2')
+            # print(self.hosts)
 
     def _request_stats(self , datapath):
         self.logger.debug('send stats request: %016x', datapath.id)
-        # ofproto = datapath.ofproto
+        ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         req = parser.OFPFlowStatsRequest(datapath)
         datapath.send_msg(req)
@@ -168,7 +168,7 @@ class Multipath(app_manager.RyuApp):
         # stat.instructions[0].actions[0].port,
 
     def show_flow_state(self, src_ip=None, dst_ip=None):
-        print('src_ip   ''dst_ip   ''switch ''byte')
+        print('src_ip   ''dst_ip   ''switch ''MB')
         print('-------- ''-------- ''------ ''----------')
         for flow in self.flow_state:
             temp = True
@@ -176,24 +176,47 @@ class Multipath(app_manager.RyuApp):
             if src_ip!=None and dst_ip!=None:
                 if flow!=(src_ip, dst_ip) and flow!=(dst_ip, src_ip): continue
             for dpid in self.flow_state[flow]:
-                if temp: print('%8s %8s %-6d %-10d' % (flow[0],flow[1],dpid,self.flow_state[flow][dpid]))
-                else:    print('                  %-6d %-10d' % (dpid,self.flow_state[flow][dpid]))
+                if temp: print('%8s %8s %-6d %-10.2f' % (flow[0],flow[1],dpid,self.flow_state[flow][dpid]/(2**20)))
+                else:    print('                  %-6d %-10.2f' % (dpid,self.flow_state[flow][dpid]/(2**20) ))
                 temp= False
 
     @set_ev_cls(ofp_event.EventOFPPortStatsReply , MAIN_DISPATCHER)
     def _port_stats_reply_handler(self , ev):
+        if not self.in_path(ev.msg.datapath.id, '10.0.0.1', '10.0.0.2'): return
         body = ev.msg.body
-        self.logger.info('datapath port     '
-                         'rx-pkts  rx-bytes rx-error '
-                         'tx-pkts  tx-bytes tx-error')
+        self.logger.info('datapath hop      '
+                         'rx-pkts  rxbyte(MB) rx-error '
+                         'tx-pkts  txbyte(MB) tx-error')
         self.logger.info('-------- -------- '
-                         '-------- -------- -------- '
-                         '-------- -------- --------')
+                         '-------- ---------- -------- '
+                         '-------- ---------- --------')
+        # hop = {flow[2]['port']: flow[1] for flow in self.links if flow[0]== ev.msg.datapath.id}
+        # 
+        #         hop[flow[2]['port']]=flow[1]
+        #         break
         for stat in sorted(body, key=attrgetter('port_no')):
-            self.logger.info('%8x %8x %8d %8d %8d %8d %8d %8d',
-                             ev.msg.datapath.id, stat.port_no ,
-                             stat.rx_packets , stat.rx_bytes , stat.rx_errors ,
-                             stat.tx_packets , stat.tx_bytes , stat.tx_errors)
+            hop = -1
+            if stat.port_no not in range(1,7): continue
+            for flow in self.links:
+                if flow[0] == ev.msg.datapath.id and flow[2]['port']==stat.port_no:
+                    hop = flow[1]
+            # hop = stat.port_no
+            self.logger.info('%8x %8x %8d %10.2f %8d %8d %10.2f %8d',
+                             ev.msg.datapath.id, hop ,
+                             stat.rx_packets , stat.rx_bytes/(2**20) , stat.rx_errors ,
+                             stat.tx_packets , stat.tx_bytes/(2**20) , stat.tx_errors)
+
+    def in_path(self, dpid, src_ip, dst_ip, at_middle=False):
+        for path in self.ksp[(src_ip,dst_ip)]:
+            if dpid in path: 
+                if at_middle == False: return True
+                if at_middle and dpid != path[1] and dpid != path[-2] : return True
+                # if dpid == path[1] or dpid
+        for path in self.ksp[(dst_ip,src_ip)]:
+            if dpid in path:
+                if at_middle == False: return True
+                if at_middle and dpid != path[1] and dpid != path[-2] : return True
+        return False
 
     def plotNet(self, file_name='network.png'):
         options = {
@@ -292,15 +315,14 @@ class Multipath(app_manager.RyuApp):
             # make buckets
             buckets = []
             for path in paths:
-                # for i in path[1:-1]:
-                #     if i==dpid: print(f'\'{i}\' ',end='')
-                #     else :print(f'{i} ',end='')
-                # print('')
                 if dpid in path:
                     next_hop = path[path.index(dpid)+1]
                     out_port = self.net[dpid][next_hop]['port']
                     action = [parser.OFPActionOutput(out_port)]
-                    buckets.append(parser.OFPBucket(weight=1, actions = action))
+                    buckets.append(parser.OFPBucket(weight = 1,
+                                                    watch_port=out_port,
+                                                    watch_group=ofproto.OFPG_ANY,
+                                                    actions = action))
             if len(buckets)==0:
                 return
             if len(buckets)==1:
@@ -309,14 +331,20 @@ class Multipath(app_manager.RyuApp):
                 # out_port = self.net[dpid][next_hop]['port']
                 actions = action
             else:
+                group_new = False
                 if (dpid, src_ip, dst_ip) not in self.group_ids:
+                    group_new = True
                     n = random.randint(0, 2**32)
                     while n in self.group_ids:
                         n = random.randint(0, 2**32)
                     self.group_ids[dpid, src_ip, dst_ip] = n
                 group_id = self.group_ids[dpid, src_ip, dst_ip]
+                if group_new == True :
+                    command = ofproto.OFPGC_ADD
+                else:
+                    command = ofproto.OFPGC_MODIFY
                 req = parser.OFPGroupMod(datapath = datapath, 
-                                         command = ofproto.OFPGC_ADD,
+                                         command = command,
                                          type_ = ofproto.OFPGT_SELECT,
                                          group_id = group_id, 
                                          buckets = buckets)
@@ -329,7 +357,7 @@ class Multipath(app_manager.RyuApp):
             out_port = ofproto.OFPP_FLOOD
             actions = [parser.OFPActionOutput(out_port)]
 
-        self.logger.info("packet in s%s(port %s) %s->%s, eth=%s", dpid, in_port, src_ip, dst_ip, hex(eth.ethertype))
+        # self.logger.info("packet in s%s(port %s) %s->%s, eth=%s", dpid, in_port, src_ip, dst_ip, hex(eth.ethertype))
 
         # if out_port != ofproto.OFPP_FLOOD:
             # if msg.buffer_id != ofproto.OFP_NO_BUFFER:
@@ -369,4 +397,5 @@ class Multipath(app_manager.RyuApp):
     def host_add_handler(self, ev):
         self.hosts.setdefault(ev.host.mac,{})
         self.hosts[ev.host.mac][ev.host.port.dpid] = ev.host.port.port_no
+        # print(self.host)
         self.mac2ip[ev.host.mac] = f'10.0.0.{ev.host.mac[16:18]}'
