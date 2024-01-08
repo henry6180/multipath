@@ -79,6 +79,15 @@ class Multipath(app_manager.RyuApp):
               }
         '''  
         self.group_ids = {}
+        self.flow_state = {}
+        '''
+        flow_state = {(10.0.0.1, 10.0.0.2): {1: b1, 2: b2, 3: b3, ...},
+                      (10.0.0.2, 10.0.0.1): {1: b1, 2: b2, 3: b3, ...},
+                      (10.0.0.1, 10.0.0.3): {1: b1, 2: b2, 3: b3, ...},
+                      ...
+                     }
+        '''
+        self.host_ip = []
 
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -115,18 +124,20 @@ class Multipath(app_manager.RyuApp):
 
     def _monitor(self):
         while True:
+            hub.sleep(3)
             for dp in self.datapaths.values():
                 self._request_stats(dp)
-            hub.sleep(10)
+            self.show_flow_state('10.0.0.1', '10.0.0.2')
+            self.show_shortest_path('10.0.0.1', '10.0.0.2')
 
     def _request_stats(self , datapath):
         self.logger.debug('send stats request: %016x', datapath.id)
-        ofproto = datapath.ofproto
+        # ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         req = parser.OFPFlowStatsRequest(datapath)
         datapath.send_msg(req)
-        req = parser.OFPPortStatsRequest(datapath , 0, ofproto.OFPP_ANY)
-        datapath.send_msg(req)
+        # req = parser.OFPPortStatsRequest(datapath , 0, ofproto.OFPP_ANY)
+        # datapath.send_msg(req)
 
     @set_ev_cls(ofp_event.EventOFPStateChange ,[MAIN_DISPATCHER, DEAD_DISPATCHER])
     def _state_change_handler(self , ev):
@@ -142,25 +153,32 @@ class Multipath(app_manager.RyuApp):
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply , MAIN_DISPATCHER)
     def _flow_stats_reply_handler(self , ev):
-        '''
-        Ipv4:
-            match = parser.OFPMatch(eth_type=eth.ethertype,
-                                    ipv4_src=src_ip,
-                                    ipv4_dst=dst_ip)
-        '''
         body = ev.msg.body
-        self.logger.info('datapath '
-                         'ipv4-src    ipv4-dst    '
-                         'packets  bytes')
-        self.logger.info('-------- '
-                         '----------- ----------- '
-                         '-------- --------')
-        for stat in sorted([flow for flow in body if flow.priority == 1 and flow.match['eth_type']==0x0800 ],key=lambda flow: (flow.match['ipv4_src'],flow.match['ipv4_dst'])):
-            self.logger.info('%8x %11s %11s %8d %8d',
-                             ev.msg.datapath.id,
-                             stat.match['ipv4_src'], stat.match['ipv4_dst'],
-                             stat.packet_count , stat.byte_count)
+        # self.logger.info('datapath ''ipv4-src    ipv4-dst    ''packets  bytes')
+        # self.logger.info('-------- ''----------- ----------- ''-------- --------')
+        # (flow.match['ipv4_src'],flow.match['ipv4_dst'])
+        for stat in sorted([flow for flow in body if flow.priority == 1 and flow.match['eth_type']==0x0800 ],key=lambda flow: flow.byte_count):
+            dpid = ev.msg.datapath.id
+            src = stat.match['ipv4_src']
+            dst = stat.match['ipv4_dst']
+            # if (src, dst) not in self.flow_state:
+            #     self.flow_state.setdefault((src,dst), {})
+            self.flow_state[(src, dst)][dpid] = stat.byte_count
+            # self.logger.info('%8x %11s %11s %8d %8d',dpid,src,dst,stat.packet_count,stat.byte_count)
         # stat.instructions[0].actions[0].port,
+
+    def show_flow_state(self, src_ip=None, dst_ip=None):
+        print('src_ip   ''dst_ip   ''switch ''byte')
+        print('-------- ''-------- ''------ ''----------')
+        for flow in self.flow_state:
+            temp = True
+            # if flow[0]!= '10.0.0.1' and flow[1] != '10.0.0.1': continue
+            if src_ip!=None and dst_ip!=None:
+                if flow!=(src_ip, dst_ip) and flow!=(dst_ip, src_ip): continue
+            for dpid in self.flow_state[flow]:
+                if temp: print('%8s %8s %-6d %-10d' % (flow[0],flow[1],dpid,self.flow_state[flow][dpid]))
+                else:    print('                  %-6d %-10d' % (dpid,self.flow_state[flow][dpid]))
+                temp= False
 
     @set_ev_cls(ofp_event.EventOFPPortStatsReply , MAIN_DISPATCHER)
     def _port_stats_reply_handler(self , ev):
@@ -213,9 +231,17 @@ class Multipath(app_manager.RyuApp):
             self.ksp[(src_ip,dst_ip)] = self.k_shortest_paths(self.net, src_ip, dst_ip)
         # print(f'path between {src_ip} and {dst_ip}:')
         # for path in self.ksp[(src_ip, dst_ip)]:
-        #     print(path[1:len(path)-1])
+        #     print(path[1:-1])
         return self.ksp[(src_ip, dst_ip)]
-                
+
+    def show_shortest_path(self,src_ip=None, dst_ip=None):
+        for flow in self.ksp:
+            # if flow[0]!= '10.0.0.1' and flow[1] != '10.0.0.1': continue
+            if src_ip!=None and dst_ip!=None:
+                if flow!=(src_ip,dst_ip) or flow!=(dst_ip,src_ip): continue
+            print(f'{flow[0]}->{flow[1]}: ')
+            for path in self.ksp[flow]:
+                print(path[1:-1])
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
@@ -251,6 +277,12 @@ class Multipath(app_manager.RyuApp):
             dst_ip = p_arp.dst_ip
         # Shortest path
         if src_ip not in self.net:
+            self.host_ip.append(src_ip)
+            if len(self.host_ip)>=2:
+                for ip in self.host_ip:
+                    if ip == src_ip: break
+                    self.flow_state.setdefault((src_ip, ip) ,{})
+                    self.flow_state.setdefault((ip, src_ip) ,{})
             self.net.add_node(src_ip)
             self.net.add_edge(src_ip,dpid)
             self.net.add_edge(dpid,src_ip,**{'port':in_port})
@@ -260,7 +292,7 @@ class Multipath(app_manager.RyuApp):
             # make buckets
             buckets = []
             for path in paths:
-                # for i in path[1:len(path)-1]:
+                # for i in path[1:-1]:
                 #     if i==dpid: print(f'\'{i}\' ',end='')
                 #     else :print(f'{i} ',end='')
                 # print('')
