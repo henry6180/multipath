@@ -73,7 +73,7 @@ sudo apt install xterm
 sudo python3 fullyconnected.py
 ```
 ### 3. Start iperf test
-After entering the Mininet terminal, using iperf to test your topology.
+After entering the Mininet terminal, use iperf to test the topology.
 In the following example, we  
 (1) Let h1 be the iperf server and let h2 be the iperf client.  
 (2) The default ip address of h1 is 10.0.0.1, you can change this in the fullyconnected.py.  
@@ -83,9 +83,10 @@ See <https://iperf.fr/> for more information about iperf.
 h1 iperf -s &
 h2 iperf -c 10.0.0.1 -b 10M -t 60 -i 5
 ```
-### 4. Exit and clean up the mininet
+### 4. Build multiple iperf sessions to see the effect of multipath
+### 5. Exit and clean up the mininet
 ```
 exit
 sudo mn -c
 ```
-The first line is to leave the mininet terminal and the second line is to clean up all setting about mininet including terminate the ryu application.
+The first line is to leave the mininet terminal and the second line is to clean up all setting about mininet including terminating the ryu application.
