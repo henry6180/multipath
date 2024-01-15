@@ -8,7 +8,7 @@ import time
 
 SWITCHNUM = 6
 
-class SampleTopo( Topo ):
+class SingleTopo( Topo ):
     def build( self ):
         s=[self.addSwitch(f's{i+1}', cls=OVSSwitch) for i in range(SWITCHNUM)]
         h=[self.addHost(f'h{i+1}',mac=f'00:00:00:00:00:0{i+1}') for i in range(SWITCHNUM)]
@@ -20,7 +20,7 @@ class SampleTopo( Topo ):
             self.addLink(h[i],s[SWITCHNUM-1], cls=TCLink, bw=5)
 
 def createTopo():
-    topo = SampleTopo()
+    topo = SingleTopo()
     c1=RemoteController(name='c1',ip='127.0.0.1',port=6653)
     net = Mininet(topo=topo,controller=c1,link=TCLink,switch=OVSSwitch)
 
