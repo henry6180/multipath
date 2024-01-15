@@ -1,6 +1,5 @@
 # Multipath routing using Ryu and Mininet  
 ## Environment Setup  
-#### If you are using conda, we provide a **ryu.yaml** file to help you setup the environment.
 ### 1. Install Mininet  
 ```
 sudo apt update
